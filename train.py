@@ -76,50 +76,70 @@ best_val_loss = float('inf')
 
 for epoch in tqdm(range(1, args.epochs + 1)):
     model.train()
-    train_losses = []
-    relative_train_losses = []
+    sum_train_losses = 0
+    train_results_per_epoch = []
     for idx, batch in enumerate(train_loader):
         batch = batch.to(device)
         optimizer.zero_grad()
-        out = model(batch.x.float(), batch.edge_attr.float(), batch.edge_index, batch.batch)
-        loss = Loss(out, batch.target.float())
-        train_losses.append(loss)
-        loss.backward()
+        total_loss_per_batch, train_results_per_batch = model(batch, Loss)
+        total_loss_per_batch.backward()
         optimizer.step()
 
-        relative_train_loss = ((out - batch.target) / (batch.target + 1e-9)).abs().mean()
-        relative_train_losses.append(relative_train_loss)
+        sum_train_losses += total_loss_per_batch.item()
+        train_results_per_epoch.append(train_results_per_batch)
+
         if idx % 20 == 0:
-            print(f'Batch {idx + 1}: training loss = {loss.item()}')
+            print(f'Batch {idx + 1}: training loss = {total_loss_per_batch.item()}')
 
     model.eval()
-    val_losses = []
-    relative_val_losses = []
+    sum_val_losses = 0
+    val_results_per_epoch = []
     with torch.no_grad():
         for batch in val_loader:
             batch = batch.to(device)
-            out = model(batch.x.float(), batch.edge_attr.float(), batch.edge_index, batch.batch)
-            loss = Loss(out, batch.target.float())
-            val_losses.append(loss)
-            relative_val_loss = ((out - batch.target) / (batch.target + 1e-9)).abs().mean()
-            relative_val_losses.append(relative_val_loss)
-    train_loss = sum(train_losses) / len(train_losses)
-    val_loss = sum(val_losses) / len(val_losses)
-    relative_train_loss = sum(relative_train_losses) / len(relative_train_losses)
-    relative_val_loss = sum(relative_val_losses) / len(relative_val_losses)
+            total_loss_per_batch, val_results_per_batch = model(batch, Loss)
+            sum_val_losses += total_loss_per_batch.item()
+            val_results_per_epoch.append(val_results_per_batch)
 
-    # if epoch == 1 or epoch % 10 == 0:
-    logger.info(f'Epoch {epoch}: train_loss={train_loss:.8f}, '
-                f'relative_train_loss={relative_train_loss:.8f}, '
-                f'val_loss={val_loss:.8f}, '
-                f'relative_val_loss={relative_val_loss:.8f}')
+    train_reduced_losses = reduce_losses(train_results_per_epoch)
+    val_reduced_losses = reduce_losses(val_results_per_epoch)
 
-    if val_loss < best_val_loss:
-        logger.info(f'Best val_loss={val_loss} so far was found! Model weights were saved.')
+    t = [train_reduced_losses['count'], val_reduced_losses['count']] + \
+        [sum_train_losses, sum_val_losses] + \
+        [*train_reduced_losses['sum loss'].values()] + \
+        [*train_reduced_losses['sum relative loss'].values()] + \
+        [*val_reduced_losses['sum loss'].values()] + \
+        [*val_reduced_losses['sum relative loss'].values()]
+    t = torch.tensor(t, dtype=torch.float, device='cuda')
+
+    num_losses = len(train_set.metadata['targets'])
+    t[2] = t[2] / t[0]
+    t[3] = t[3] / t[1]
+    t[4: 2 * num_losses + 4] = t[4: 2 * num_losses + 4] / t[0]
+    t[2 * num_losses + 4:] = t[2 * num_losses + 4:] / t[1]
+    t = t[2:].tolist()
+
+    logger.info(f'Epoch {epoch}, Total: train_loss={t[0]:.8f}, val_loss={t[1]:.8f}')
+
+    for name, \
+        train_loss, \
+        train_relative_loss, \
+        val_loss, \
+        val_relative_loss in zip([target['name'] for target in train_set.metadata['targets']],
+                                 t[2: num_losses + 2],
+                                 t[num_losses + 2: 2 * num_losses + 2],
+                                 t[2 * num_losses + 2: 3 * num_losses + 2],
+                                 t[3 * num_losses + 2:]):
+        logger.info(f'\t{name}, '
+                    f'Train: loss={train_loss:.8f}, relative_loss={train_relative_loss:.8f}, '
+                    f'Val: loss={val_loss:.8f}, relative_loss={val_relative_loss:.8f}')
+
+    if t[1] < best_val_loss:
+        logger.info(f'Best val_loss={t[1]} so far was found! Model weights were saved.')
         if epoch < 400:
             torch.save(model.state_dict(), osp.join(output_dir, 'best_weights_early_epoch.pth'))
         else:
             num_digits = int(np.ceil(np.log(args.epochs) / np.log(10) + 1))
             torch.save(model.state_dict(), osp.join(output_dir, f'best_weights_epoch_{epoch:0{num_digits}d}.pth'))
 
-        best_val_loss = val_loss
+        best_val_loss = t[1]

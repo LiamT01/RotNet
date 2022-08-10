@@ -11,7 +11,7 @@ from dataset import GraphDataset
 from models import GNN
 from torch_geometric.loader import DataLoader
 from tqdm import tqdm
-from utils import get_logger
+from utils import get_logger, reduce_losses
 
 # output_dir = f'exp/train_{datetime.now():%Y-%m-%d_%H:%M:%S}'
 # logger = get_logger(osp.join(output_dir, 'train.log'))
@@ -50,11 +50,10 @@ test_set = GraphDataset(root='data',
 test_loader = DataLoader(test_set, batch_size=args.batch_size)
 
 model = GNN(num_layers=args.num_layers, x_size=args.x_size, hidden_size=args.hidden_size,
-            cutoff=args.cutoff, gaussian_num_steps=args.gaussian_num_steps)
+            cutoff=args.cutoff, gaussian_num_steps=args.gaussian_num_steps, targets=test_set.metadata['targets'])
 model = model.float().to(device)
 
 weights = torch.load(args.checkpoint, map_location=torch.device('cpu'))
-# torch.nn.modules.utils.consume_prefix_in_state_dict_if_present(weights, "module.")
 model.load_state_dict(weights)
 
 Loss = torch.nn.L1Loss()
@@ -66,21 +65,34 @@ Loss = torch.nn.L1Loss()
 # best_val_loss = float('inf')
 
 model.eval()
-test_losses = []
-relative_test_losses = []
+sum_test_losses = 0
+test_results_per_epoch = []
 with torch.no_grad():
     for batch in tqdm(test_loader):
         batch = batch.to(device)
-        out = model(batch.x.float(), batch.edge_attr.float(), batch.edge_index, batch.batch).flatten()
-        loss = Loss(out, batch.target.float())
-        test_losses.append(loss)
-        relative_test_loss = ((out - batch.target) / (batch.target + 1e-9)).abs().mean()
-        relative_test_losses.append(relative_test_loss)
+        total_loss_per_batch, test_results_per_batch = model(batch, Loss)
+        sum_test_losses += total_loss_per_batch.item()
+        test_results_per_epoch.append(test_results_per_batch)
 
-test_loss = sum(test_losses) / len(test_losses)
-relative_test_loss = sum(relative_test_losses) / len(relative_test_losses)
+test_reduced_losses = reduce_losses(test_results_per_epoch)
 
-# logger.info(f'test_loss={test_loss:.8f}, '
-#             f'relative_test_loss={relative_test_loss:.8f}')
-print(f'test_loss={test_loss:.8f}, '
-      f'relative_test_loss={relative_test_loss:.8f}')
+t = [test_reduced_losses['count']] + \
+    [sum_test_losses] + \
+    [*test_reduced_losses['sum loss'].values()] + \
+    [*test_reduced_losses['sum relative loss'].values()]
+t = torch.tensor(t, dtype=torch.float, device='cuda')
+
+num_losses = len(test_set.metadata['targets'])
+t[1] = t[1] / t[0]
+t[2: 2 * num_losses + 2] = t[2: 2 * num_losses + 2] / t[0]
+t = t[1:].tolist()
+
+print(f'Total: test_loss={t[0]:.8f}')
+
+for name, \
+    test_loss, \
+    test_relative_loss in zip([target['name'] for target in test_set.metadata['targets']],
+                              t[1: num_losses + 1],
+                              t[num_losses + 1:]):
+    print(f'\t{name}, '
+          f'Test: loss={test_loss:.8f}, relative_loss={test_relative_loss:.8f}')
