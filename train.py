@@ -33,9 +33,11 @@ def main():
     parser.add_argument('--hidden_size', default=512, type=int)
 
     #########################################################
-    parser.add_argument('--num_nodes', default=1, type=int, metavar='N')
-    parser.add_argument('--num_gpus_per_node', default=1, type=int, help='Number of gpus per node.')
-    parser.add_argument('--node_rank', default=0, type=int, help='Ranking within the nodes.')
+    parser.add_argument('--num_nodes', type=int, default=1, metavar='N')
+    parser.add_argument('--num_gpus_per_node', type=int, default=1, help='Number of gpus per node.')
+    parser.add_argument('--node_rank', type=int, default=0, help='Ranking within the nodes.')
+    parser.add_argument('--master_addr', type=str, default='0.0.0.0')
+    parser.add_argument('--master_port', type=str, default='8888')
     #########################################################
 
     args = parser.parse_args()
@@ -43,12 +45,12 @@ def main():
     if args.distributed:
         ############################################################
         args.world_size = args.num_gpus_per_node * args.num_nodes  #
-        os.environ['MASTER_ADDR'] = '0.0.0.0'                      #
-        os.environ['MASTER_PORT'] = '7777'                         #
-        mp.spawn(train, nprocs=args.num_gpus_per_node, args=(args,))            #
+        os.environ['MASTER_ADDR'] = args.master_addr                     #
+        os.environ['MASTER_PORT'] = args.master_port                       #
+        mp.spawn(train, nprocs=args.world_size, args=(args,))            #
         ############################################################
-
-    train(0, args)
+    else:
+        train(0, args)
 
 
 def train(gpu, args):
