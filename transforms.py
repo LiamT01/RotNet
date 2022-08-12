@@ -9,7 +9,7 @@ def get_invariant_pos(pos):
         pos = pos.numpy()
 
     # Shift pos to be centered
-    pos_centered = pos - pos.mean(0).reshape(1, -1)
+    pos_centered = pos - pos.mean(0).reshape((1, -1))
 
     # SVD decomposition
     _, _, vv = np.linalg.svd(pos_centered)

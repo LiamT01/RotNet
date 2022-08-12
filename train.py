@@ -13,7 +13,7 @@ from dataset import GraphDataset
 from models import GNN
 from torch_geometric.loader import DataLoader
 from tqdm import tqdm
-from utils import get_logger, reduce_losses
+from utils import get_logger, reduce_losses, get_num_digits
 from weights import weights
 
 
@@ -45,16 +45,16 @@ def main():
     if args.distributed:
         ############################################################
         args.world_size = args.num_gpus_per_node * args.num_nodes  #
-        os.environ['MASTER_ADDR'] = args.master_addr                     #
-        os.environ['MASTER_PORT'] = args.master_port                       #
-        mp.spawn(train, nprocs=args.world_size, args=(args,))            #
+        os.environ['MASTER_ADDR'] = args.master_addr               #
+        os.environ['MASTER_PORT'] = args.master_port               #
+        mp.spawn(train, nprocs=args.world_size, args=(args,))      #
         ############################################################
     else:
         train(0, args)
 
 
 def train(gpu, args):
-    rank = None
+    rank = -1
     if args.distributed:
         ############################################################
         rank = args.node_rank * args.num_gpus_per_node + gpu
@@ -73,7 +73,7 @@ def train(gpu, args):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-    if not args.distributed or rank == 0:
+    if rank <= 0:
         output_dir = f'exp/train_{datetime.now():%Y-%m-%d_%H:%M:%S}'
         logger = get_logger(osp.join(output_dir, 'train.log'))
 
@@ -150,9 +150,10 @@ def train(gpu, args):
     loss_fn = torch.nn.L1Loss().cuda(gpu)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
-    if not args.distributed or rank == 0:
+    if rank <= 0:
         logger.info(args)
         logger.info(args.dataset_name)
+        logger.info(weights)
         logger.info(model)
         logger.info(f'Average edges per node: {train_set.metadata["averageEdgesPerNode"]}')
 
@@ -212,7 +213,7 @@ def train(gpu, args):
         t[2 * num_losses + 4:] = t[2 * num_losses + 4:] / t[1]
         t = t[2:].tolist()
 
-        if not args.distributed or rank == 0:
+        if rank <= 0:
             logger.info(f'Epoch {epoch}, Total: train_loss={t[0]:.8f}, val_loss={t[1]:.8f}')
 
             for name, \
@@ -237,7 +238,7 @@ def train(gpu, args):
                     else:
                         torch.save(model.state_dict(), osp.join(output_dir, 'best_weights_early_epoch.pth'))
                 else:
-                    num_digits = int(np.ceil(np.log(args.epochs) / np.log(10) + 1))
+                    num_digits = get_num_digits(args.epochs)
                     if args.distributed:
                         torch.save(model.module.state_dict(),
                                    osp.join(output_dir, f'best_weights_epoch_{epoch:0{num_digits}d}.pth'))

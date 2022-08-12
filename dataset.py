@@ -13,6 +13,7 @@ from torch_geometric.loader import DataLoader
 from torch_geometric.nn import radius_graph
 from tqdm import tqdm
 from transforms import get_invariant_pos
+from utils import get_num_digits
 
 
 class GraphDataset(Dataset):
@@ -45,9 +46,12 @@ class GraphDataset(Dataset):
         os.makedirs(self.processed_data_dir, exist_ok=True)
         os.makedirs(self.separate_data_dir, exist_ok=True)
 
-        if len(os.listdir(self.separate_data_dir)) == 0:
+        self.num_digits = None
+
+        if len(glob.glob(osp.join(self.separate_data_dir, '*.pth'))) == 0:
             processed_data_path = osp.join(self.processed_data_dir, f'{self.dataset_name}_data.pth')
             if not osp.exists(processed_data_path):
+                print(f'Creating data at {processed_data_path}...')
                 data = self.get_data(self.dataset_name)
                 sum_num_edges = 0
                 sum_num_nodes = 0
@@ -55,8 +59,9 @@ class GraphDataset(Dataset):
                     sum_num_edges += graph.edge_index.shape[1]
                     sum_num_nodes += graph.x.shape[0]
                 avg_edges = sum_num_edges / sum_num_nodes
-                print(f'Average incoming edges per node: {avg_edges}')
+                print(f'Average incoming edges per node: {avg_edges}.')
             else:
+                print(f'Using existing data at {processed_data_path}.')
                 data = torch.load(processed_data_path)
 
             np.random.seed(seed)
@@ -72,9 +77,11 @@ class GraphDataset(Dataset):
             else:
                 data = data[idx[0] + idx[1]:]
 
+            self.num_digits = get_num_digits(len(data))
+
             print(f'Storing separate graphs from {self.split} set...')
             for i, graph in enumerate(tqdm(data)):
-                torch.save(graph, osp.join(self.separate_data_dir, f'{i:06d}.pth'))
+                torch.save(graph, osp.join(self.separate_data_dir, f'{i:0{self.num_digits}d}.pth'))
 
             with open(osp.join(self.processed_data_dir, 'metadata.json'), 'r') as f:
                 self.metadata = json.load(f)
@@ -89,6 +96,15 @@ class GraphDataset(Dataset):
             with open(osp.join(self.separate_data_dir, 'metadata.json'), 'w') as f:
                 json.dump(self.metadata, f, indent=4)
         else:
+            print(f'Using existing data at {self.separate_data_dir}. '
+                  f'If you want to change the dataset settings, '
+                  f'such as the cut-off distance and the train-val-test split ratio, '
+                  f'please recursively delete the existing data at {self.processed_data_dir} '
+                  f'and {self.separate_data_dir}, '
+                  f'and a new dataset will be re-created automatically upon running the code.')
+
+            self.num_digits = get_num_digits(len(glob.glob(osp.join(self.separate_data_dir, '*.pth'))))
+
             with open(osp.join(self.separate_data_dir, 'metadata.json'), 'r') as f:
                 self.metadata = json.load(f)
 
@@ -171,10 +187,7 @@ class GraphDataset(Dataset):
         return len(glob.glob(f'{self.separate_data_dir}/*.pth'))
 
     def __getitem__(self, idx):
-        return torch.load(osp.join(self.separate_data_dir, f'{idx:06d}.pth'))
-
-    def get_metadata(self):
-        return self.metadata
+        return torch.load(osp.join(self.separate_data_dir, f'{idx:0{self.num_digits}d}.pth'))
 
 
 if __name__ == '__main__':
@@ -190,4 +203,3 @@ if __name__ == '__main__':
                                    cutoff=6,
                                    use_invariance=use_invariance)
             datasets.append(dataset)
-    pdb.set_trace()

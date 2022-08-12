@@ -2,6 +2,7 @@ import sys
 from collections import defaultdict
 from datetime import datetime
 
+import numpy as np
 from loguru import logger
 
 
@@ -25,3 +26,7 @@ def reduce_losses(loss_list):
         'sum loss': sum_losses,
         'sum relative loss': sum_relative_losses,
     }
+
+
+def get_num_digits(number):
+    return int(np.ceil(np.log(number) / np.log(10) + 1))
