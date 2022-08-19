@@ -12,24 +12,24 @@ def get_invariant_pos(pos):
     pos_centered = pos - pos.mean(0).reshape((1, -1))
 
     # SVD decomposition
-    _, _, vv = np.linalg.svd(pos_centered)
+    _, _, vt = np.linalg.svd(pos_centered)
 
-    # Each row of vv is a principle vector
-    # vv is orthonormal
-    # The rotation matrix is simply the transposed vv
+    # Each row of vt is a principle vector
+    # vt is orthonormal
+    # The rotation matrix is simply the transposed vt
     # First, get a tentative transformed result
-    rot_mat = vv.T
+    rot_mat = vt.T
     trans = pos_centered @ rot_mat
 
     # Take the farthest node from the origin as the reference node
     ref_node = np.argmax(np.linalg.norm(trans, axis=1))
     ref_coord = trans[ref_node]
 
-    # vv from SVD can have vectors of arbitrary directions
-    # Invert axes to make ref_node lie in Quadrant 1 using a mask
-    mask = np.ones(3)
+    # vt from SVD can have vectors of arbitrary directions
+    # Invert axes to make ref_node lie in the first quadrant/octant using a mask
+    mask = np.ones(pos.shape[1])
     mask[ref_coord < 0] = -1
-    mask = mask.reshape((1, 3))
+    mask = mask.reshape((1, pos.shape[1]))
 
     # The final rot_mat and trans
     rot_mat = rot_mat * mask
@@ -63,4 +63,5 @@ if __name__ == '__main__':
     invariant = get_invariant_pos(pos)
     _invariant = get_invariant_pos(_pos)
 
-    assert np.allclose(invariant, _invariant)
+    assert np.allclose(invariant['trans'], _invariant['trans'])
+    print('Passed.')

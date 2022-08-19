@@ -1,3 +1,4 @@
+import argparse
 import glob
 import json
 import os
@@ -83,7 +84,7 @@ class GraphDataset(Dataset):
             for i, graph in enumerate(tqdm(data)):
                 torch.save(graph, osp.join(self.separate_data_dir, f'{i:0{self.num_digits}d}.pth'))
 
-            with open(osp.join(self.processed_data_dir, 'metadata.json'), 'r') as f:
+            with open(osp.join(self.processed_data_dir, f'{self.dataset_name}_metadata.json'), 'r') as f:
                 self.metadata = json.load(f)
 
             sum_num_edges = 0
@@ -132,7 +133,7 @@ class GraphDataset(Dataset):
                 if target['level'] == 'graph':
                     target['data'] = target['data'].reshape(1, -1)
                 elif target['level'] == 'node':
-                    target['data'] = target['data'].reshape(len(atom_list), -1)
+                    target['data'] = target['data'].reshape(len(data['elements']), -1)
                 else:
                     raise Exception(f"Unrecognized level: {target['level']}. It must be either 'graph' or 'node'.")
                 targets.append(target)
@@ -143,7 +144,7 @@ class GraphDataset(Dataset):
                 rot_mat = torch.from_numpy(trans_result['rot_mat']).float()
                 for target in targets:
                     if target['isSpatial']:
-                        assert target['data'].shape(1) == 3, 'Spatial data must be three-dimensional!'
+                        assert target['data'].shape[1] == 3, 'Spatial data must be three-dimensional!'
                         target['data'] = target['data'] @ rot_mat
 
             graph = Data(x=x, pos=pos)
@@ -176,7 +177,7 @@ class GraphDataset(Dataset):
                     meta_targets = {key: value for key, value in target.items() if key != 'data'}
                     meta_targets['dim'] = target['data'].shape[1]
                     self.metadata['targets'].append(meta_targets)
-                    with open(osp.join(self.processed_data_dir, 'metadata.json'), 'w') as f:
+                    with open(osp.join(self.processed_data_dir, f'{self.dataset_name}_metadata.json'), 'w') as f:
                         json.dump(self.metadata, f, indent=4)
 
             graph_data.append(graph)
@@ -191,15 +192,32 @@ class GraphDataset(Dataset):
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dataset_name', type=str, required=True)
+    parser.add_argument('--cutoff', default=4, type=float)
+    parser.add_argument('--seed', default=0, type=int)
+    parser.add_argument('--remake', action='store_true')
+    args = parser.parse_args()
+
+    if args.remake:
+        for kind in ['default', 'invariant']:
+            if osp.exists(osp.join('data', 'processed', kind, f'{args.dataset_name}_data.pth')):
+                os.remove(osp.join('data', 'processed', kind, f'{args.dataset_name}_data.pth'))
+            if osp.exists(osp.join('data', 'processed', kind, f'{args.dataset_name}_metadata.json')):
+                os.remove(osp.join('data', 'processed', kind, f'{args.dataset_name}_metadata.json'))
+
+            shutil.rmtree(osp.join('data', 'separate', kind, args.dataset_name), ignore_errors=True)
+
     datasets = []
     for use_invariance in [True, False]:
         for split in ['train', 'val', 'test']:
             dataset = GraphDataset(root='data',
-                                   dataset_name='qm7',
+                                   dataset_name=args.dataset_name,
                                    ele_label='data/ele.json',
                                    atom_embed='data/atom_init_embedding.json',
                                    radii='data/radii.json',
                                    split=split,
-                                   cutoff=6,
+                                   cutoff=args.cutoff,
+                                   seed=args.seed,
                                    use_invariance=use_invariance)
             datasets.append(dataset)

@@ -6,11 +6,11 @@ import numpy as np
 from loguru import logger
 
 
-def get_logger(outputfile):
+def get_logger(output_file):
     log_format = "[<green>{time:YYYY-MM-DD HH:mm:ss}</green>] {message}"
     logger.configure(handlers=[{"sink": sys.stderr, "format": log_format}])
-    if outputfile:
-        logger.add(outputfile, enqueue=True, format=log_format)
+    if output_file:
+        logger.add(output_file, enqueue=True, format=log_format)
     return logger
 
 
@@ -29,4 +29,4 @@ def reduce_losses(loss_list):
 
 
 def get_num_digits(number):
-    return int(np.ceil(np.log(number) / np.log(10) + 1))
+    return int(np.log10(number)) + 1

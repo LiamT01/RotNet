@@ -75,7 +75,9 @@ def train(gpu, args):
 
     if rank <= 0:
         output_dir = f'exp/train_{datetime.now():%Y-%m-%d_%H:%M:%S}'
+        ckpt_dir = osp.join(output_dir, 'checkpoints')
         logger = get_logger(osp.join(output_dir, 'train.log'))
+        os.makedirs(ckpt_dir, exist_ok=True)
 
     torch.cuda.set_device(gpu)
 
@@ -111,7 +113,6 @@ def train(gpu, args):
         )
         ################################################################
 
-    if args.distributed:
         train_loader = DataLoader(
             train_set,
             batch_size=args.batch_size,
@@ -232,19 +233,19 @@ def train(gpu, args):
 
             if t[1] < best_val_loss:
                 logger.info(f'\t\tBest val_loss={t[1]} so far was found! Model weights were saved.')
-                if epoch < 400:
-                    if args.distributed:
-                        torch.save(model.module.state_dict(), osp.join(output_dir, 'best_weights_early_epoch.pth'))
-                    else:
-                        torch.save(model.state_dict(), osp.join(output_dir, 'best_weights_early_epoch.pth'))
+                # if epoch < 400:
+                #     if args.distributed:
+                #         torch.save(model.module.state_dict(), osp.join(ckpt_dir, 'early_epoch.pth'))
+                #     else:
+                #         torch.save(model.state_dict(), osp.join(ckpt_dir, 'early_epoch.pth'))
+                # else:
+                num_digits = get_num_digits(args.epochs)
+                if args.distributed:
+                    torch.save(model.module.state_dict(),
+                               osp.join(ckpt_dir, f'epoch_{epoch:0{num_digits}d}.pth'))
                 else:
-                    num_digits = get_num_digits(args.epochs)
-                    if args.distributed:
-                        torch.save(model.module.state_dict(),
-                                   osp.join(output_dir, f'best_weights_epoch_{epoch:0{num_digits}d}.pth'))
-                    else:
-                        torch.save(model.state_dict(),
-                                   osp.join(output_dir, f'best_weights_epoch_{epoch:0{num_digits}d}.pth'))
+                    torch.save(model.state_dict(),
+                               osp.join(ckpt_dir, f'epoch_{epoch:0{num_digits}d}.pth'))
 
                 best_val_loss = t[1]
 

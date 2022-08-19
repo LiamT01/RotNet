@@ -45,7 +45,18 @@ class GNNLayer(nn.Module):
 
         m_st = cond_filter * self.f_d(x[src])
         m_t = self.v * self.f_d(x)
-        return self.f_n(m_t + scatter_add(m_st, index=dst, dim=0)) + x
+        incoming_message = scatter_add(m_st, index=dst, dim=0)
+        incoming_message = torch.cat(
+            [
+                incoming_message,
+                torch.zeros(
+                    x.shape[0] - incoming_message.shape[0],
+                    x.shape[1]
+                ).to(incoming_message.device)
+            ],
+            dim=0
+        )
+        return self.f_n(m_t + incoming_message) + x
 
 
 class GNN(nn.Module):
@@ -63,14 +74,14 @@ class GNN(nn.Module):
         ])
         self.f_x = nn.Linear(x_size, hidden_size)
         self.targets = targets
-        self.f_target = nn.ModuleList()
-        for target in self.targets:
-            self.f_target.append(nn.Sequential(
+        self.f_target = nn.ModuleList([
+            nn.Sequential(
                 nn.Linear(hidden_size, hidden_size // 2),
                 nn.LeakyReLU(),
                 nn.BatchNorm1d(hidden_size // 2),
                 nn.Linear(hidden_size // 2, target['dim']),
-            ))
+            ) for target in self.targets
+        ])
 
     def forward(self, batch, loss_fn):
         batch.x = self.f_x(batch.x)
@@ -98,7 +109,7 @@ class GNN(nn.Module):
                 'data': data,
                 'loss': loss,
                 'relative loss': ((data - ground_truth).norm(p=2, dim=1) /
-                                  (ground_truth + 1e-9).norm(p=2, dim=1)).abs().mean(),
+                                  (ground_truth + 1e-9).norm(p=2, dim=1)).mean(),
             })
 
         return total_loss_per_batch, results
