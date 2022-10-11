@@ -10,12 +10,11 @@ from transforms import gaussian_expand
 
 
 class GNNLayer(nn.Module):
-    def __init__(self, hidden_size, cutoff, f_b, gaussian_num_steps):
+    def __init__(self, hidden_size, cutoff):
         super().__init__()
 
         self.hidden_size = hidden_size
         self.cutoff = cutoff
-        self.gaussian_num_steps = gaussian_num_steps
 
         self.f_n = nn.Sequential(
             nn.Linear(hidden_size, hidden_size),
@@ -32,14 +31,12 @@ class GNNLayer(nn.Module):
             nn.BatchNorm1d(hidden_size),
             nn.Linear(hidden_size, hidden_size),
         )
-        self.f_b = f_b
         self.f_d = nn.Linear(hidden_size, hidden_size)
         self.v = nn.Parameter(torch.ones(hidden_size).reshape(1, -1))
 
-    def forward(self, x, edge_attr, edge_index):
+    def forward(self, x, edge_attr, edge_index, gaussian_transformed):
         src, dst = edge_index
 
-        gaussian_transformed = self.f_b(gaussian_expand(edge_attr, self.gaussian_num_steps))
         coefficient = torch.cos(np.pi / 2 * edge_attr[:, 3]).reshape(-1, 1)
         cond_filter = coefficient * self.f_e(torch.cat([x[src], gaussian_transformed, x[dst]], dim=1))
 
@@ -63,16 +60,15 @@ class GNN(nn.Module):
     def __init__(self, num_layers, x_size, hidden_size, cutoff, gaussian_num_steps, targets):
         super().__init__()
 
+        self.gaussian_num_steps = gaussian_num_steps
         self.f_b = nn.Linear(7 * gaussian_num_steps, hidden_size)
+        self.f_x = nn.Linear(x_size, hidden_size)
         self.layers = nn.ModuleList([
             GNNLayer(
                 hidden_size=hidden_size,
                 cutoff=cutoff,
-                f_b=self.f_b,
-                gaussian_num_steps=gaussian_num_steps
             ) for _ in range(num_layers)
         ])
-        self.f_x = nn.Linear(x_size, hidden_size)
         self.targets = targets
         self.f_target = nn.ModuleList([
             nn.Sequential(
@@ -85,8 +81,10 @@ class GNN(nn.Module):
 
     def forward(self, batch, loss_fn):
         batch.x = self.f_x(batch.x)
+        gaussian_transformed = self.f_b(gaussian_expand(batch.edge_attr, self.gaussian_num_steps))
+
         for layer in self.layers:
-            batch.x = layer(batch.x, batch.edge_attr, batch.edge_index)
+            batch.x = layer(batch.x, batch.edge_attr, batch.edge_index, gaussian_transformed)
 
         results = []
         total_loss_per_batch = 0
