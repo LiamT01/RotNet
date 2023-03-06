@@ -13,113 +13,62 @@ from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn import radius_graph
 from tqdm import tqdm
-from transforms import get_invariant_pos
+from transforms import calc_rot_mat
 from utils import get_num_digits
 
 
 class GraphDataset(Dataset):
-    def __init__(self, root, dataset_name, ele_label, atom_embed,
-                 radii, split, cutoff, split_ratio=None, seed=0, use_invariance=False):
+    def __init__(self, root, dataset_name, atom_embed,
+                 split, cutoff, split_ratio=None, seed=0, use_invariance=False):
         super().__init__()
 
         if split_ratio is None:
             split_ratio = {'train': 0.8, 'val': 0.1, 'test': 0.1, }
-        self.split_ratio = split_ratio
-        self.split = split
-        self.seed = seed
+
+        assert split in ['train', 'val', 'test'], "split must be one of ['train', 'val', 'test']!"
+
         self.root = root
-        self.dataset_name = dataset_name
-        self.ele_label = ele_label
         self.atom_embed = atom_embed
-        self.radii = radii
         self.cutoff = cutoff
         self.use_invariance = use_invariance
+        self.metadata_dir = osp.join(self.root, 'processed', dataset_name)
 
-        if self.use_invariance:
-            self.processed_data_dir = osp.join(self.root, 'processed', 'invariant')
-            self.separate_data_dir = osp.join(self.root, 'separate', 'invariant', dataset_name, split)
+        invariance_type = 'invariant' if self.use_invariance else 'default'
+        self.processed_dir = osp.join(self.root, 'processed', dataset_name, invariance_type)
+
+        os.makedirs(self.metadata_dir, exist_ok=True)
+        os.makedirs(self.processed_dir, exist_ok=True)
+
+        if len(glob.glob(osp.join(self.processed_dir, '*.pth'))) !=\
+                len(glob.glob(f'{osp.join(self.root, "raw", dataset_name)}/*')):
+            print(f'Processed data missing or incomplete. Creating data at {self.processed_dir}...')
+            self.process_data(dataset_name)
+
+        self.data_files = sorted(glob.glob(osp.join(self.processed_dir, '*.pth')))
+
+        np.random.seed(seed)
+        np.random.shuffle(self.data_files)
+
+        idx = [int(split_ratio['train'] * len(self.data_files)),
+               int(split_ratio['val'] * len(self.data_files))]
+
+        if split == 'train':
+            self.data_files = self.data_files[: idx[0]]
+        elif split == 'val':
+            self.data_files = self.data_files[idx[0]: idx[0] + idx[1]]
         else:
-            self.processed_data_dir = osp.join(self.root, 'processed', 'default')
-            self.separate_data_dir = osp.join(self.root, 'separate', 'default', dataset_name, split)
+            self.data_files = self.data_files[idx[0] + idx[1]:]
 
-        self.metadata = {}
+        with open(osp.join(self.metadata_dir, 'metadata.json'), 'r') as f:
+            self.metadata = json.load(f)
 
-        os.makedirs(self.processed_data_dir, exist_ok=True)
-        os.makedirs(self.separate_data_dir, exist_ok=True)
-
-        self.num_digits = None
-
-        if len(glob.glob(osp.join(self.separate_data_dir, '*.pth'))) == 0:
-            processed_data_path = osp.join(self.processed_data_dir, f'{self.dataset_name}_data.pth')
-            if not osp.exists(processed_data_path):
-                print(f'Creating data at {processed_data_path}...')
-                data = self.get_data(self.dataset_name)
-                sum_num_edges = 0
-                sum_num_nodes = 0
-                for graph in data:
-                    sum_num_edges += graph.edge_index.shape[1]
-                    sum_num_nodes += graph.x.shape[0]
-                avg_edges = sum_num_edges / sum_num_nodes
-                print(f'Average incoming edges per node: {avg_edges}.')
-            else:
-                print(f'Using existing data at {processed_data_path}.')
-                data = torch.load(processed_data_path)
-
-            np.random.seed(seed)
-            np.random.shuffle(data)
-
-            idx = [int(self.split_ratio['train'] * len(data)),
-                   int(self.split_ratio['val'] * len(data))]
-
-            if self.split == 'train':
-                data = data[: idx[0]]
-            elif self.split == 'val':
-                data = data[idx[0]: idx[0] + idx[1]]
-            else:
-                data = data[idx[0] + idx[1]:]
-
-            self.num_digits = get_num_digits(len(data))
-
-            print(f'Storing separate graphs from {self.split} set...')
-            for i, graph in enumerate(tqdm(data)):
-                torch.save(graph, osp.join(self.separate_data_dir, f'{i:0{self.num_digits}d}.pth'))
-
-            with open(osp.join(self.processed_data_dir, f'{self.dataset_name}_metadata.json'), 'r') as f:
-                self.metadata = json.load(f)
-
-            sum_num_edges = 0
-            sum_num_nodes = 0
-            for graph in data:
-                sum_num_edges += graph.edge_index.shape[1]
-                sum_num_nodes += graph.x.shape[0]
-            self.metadata['averageEdgesPerNode'] = sum_num_edges / sum_num_nodes
-
-            with open(osp.join(self.separate_data_dir, 'metadata.json'), 'w') as f:
-                json.dump(self.metadata, f, indent=4)
-        else:
-            print(f'Using existing data at {self.separate_data_dir}. '
-                  f'If you want to change the dataset settings, '
-                  f'such as the cut-off distance and the train-val-test split ratio, '
-                  f'please recursively delete the existing data at {self.processed_data_dir} '
-                  f'and {self.separate_data_dir}, '
-                  f'and a new dataset will be re-created automatically upon running the code.')
-
-            self.num_digits = get_num_digits(len(glob.glob(osp.join(self.separate_data_dir, '*.pth'))))
-
-            with open(osp.join(self.separate_data_dir, 'metadata.json'), 'r') as f:
-                self.metadata = json.load(f)
-
-    def get_data(self, dataset_name):
+    def process_data(self, dataset_name):
         with open(self.atom_embed, 'r') as f:
             embed = json.load(f)
 
-        with open(self.radii, 'r') as f:
-            radii = json.load(f)
-
-        with open(self.ele_label, 'r') as f:
-            ele_label = json.load(f)
-
-        graph_data = []
+        sum_num_edges = 0
+        sum_num_nodes = 0
+        metadata = {'targets': []}
         for index, file_name in enumerate(tqdm(sorted(glob.glob(f'{osp.join(self.root, "raw", dataset_name)}/*')))):
             with open(file_name, 'r') as f:
                 data = json.load(f)
@@ -130,18 +79,16 @@ class GraphDataset(Dataset):
             targets = []
             for target in data['targets']:
                 target['data'] = torch.tensor(target['data'], dtype=torch.float)
+                assert target['level'] in ['graph', 'node'], "Target level must be one of ['graph', 'node']!"
                 if target['level'] == 'graph':
                     target['data'] = target['data'].reshape(1, -1)
-                elif target['level'] == 'node':
-                    target['data'] = target['data'].reshape(len(data['elements']), -1)
                 else:
-                    raise Exception(f"Unrecognized level: {target['level']}. It must be either 'graph' or 'node'.")
+                    target['data'] = target['data'].reshape(len(data['elements']), -1)
                 targets.append(target)
 
             if self.use_invariance:
-                trans_result = get_invariant_pos(pos)
-                pos = torch.from_numpy(trans_result['trans']).float()
-                rot_mat = torch.from_numpy(trans_result['rot_mat']).float()
+                rot_mat = calc_rot_mat(pos)
+                pos = pos @ rot_mat
                 for target in targets:
                     if target['isSpatial']:
                         assert target['data'].shape[1] == 3, 'Spatial data must be three-dimensional!'
@@ -152,43 +99,33 @@ class GraphDataset(Dataset):
             for target in targets:
                 graph[target['name']] = target['data']
 
-            graph.edge_index = radius_graph(graph.pos, self.cutoff)
+            graph['edge_index'] = radius_graph(graph.pos, self.cutoff)
 
             src, dst = graph.edge_index
             displacement = graph.pos[dst] - graph.pos[src]
-
             distance = (displacement ** 2).sum(dim=1, keepdim=True).sqrt()
-            n_st = displacement / distance
-
-            if n_st.isnan().sum() > 0:
-                print(f'File {file_name} encountered null! Skipped.')
-                continue
-
-            atom_radii = torch.tensor([radii[atom] for atom in data['elements']], dtype=torch.float).reshape(-1, 1)
-            a_s = atom_radii[src]
-            a_t = atom_radii[dst]
-            p_st = torch.cat([distance, distance - a_s, distance - a_t, distance - a_s - a_t], dim=1)
-
-            graph.edge_attr = torch.cat([n_st, p_st / self.cutoff], dim=1)
+            graph['ex_norm_displacement'] = torch.cat([displacement / distance, distance / self.cutoff], dim=1)
 
             if index == 0:
-                self.metadata['targets'] = []
                 for target in targets:
                     meta_targets = {key: value for key, value in target.items() if key != 'data'}
                     meta_targets['dim'] = target['data'].shape[1]
-                    self.metadata['targets'].append(meta_targets)
-                    with open(osp.join(self.processed_data_dir, f'{self.dataset_name}_metadata.json'), 'w') as f:
-                        json.dump(self.metadata, f, indent=4)
+                    metadata['targets'].append(meta_targets)
 
-            graph_data.append(graph)
-        torch.save(graph_data, osp.join(self.processed_data_dir, f'{dataset_name}_data.pth'))
-        return graph_data
+            torch.save(graph, osp.join(self.processed_dir, file_name.split('/')[-1].replace('json', 'pth')))
+
+            sum_num_edges += graph.edge_index.shape[1]
+            sum_num_nodes += graph.x.shape[0]
+
+        metadata['averageEdgesPerNode'] = sum_num_edges / sum_num_nodes
+        with open(osp.join(self.metadata_dir, 'metadata.json'), 'w') as f:
+            json.dump(metadata, f, indent=4)
 
     def __len__(self):
-        return len(glob.glob(f'{self.separate_data_dir}/*.pth'))
+        return len(self.data_files)
 
     def __getitem__(self, idx):
-        return torch.load(osp.join(self.separate_data_dir, f'{idx:0{self.num_digits}d}.pth'))
+        return torch.load(self.data_files[idx])
 
 
 if __name__ == '__main__':
@@ -201,23 +138,18 @@ if __name__ == '__main__':
 
     if args.remake:
         for kind in ['default', 'invariant']:
-            if osp.exists(osp.join('data', 'processed', kind, f'{args.dataset_name}_data.pth')):
-                os.remove(osp.join('data', 'processed', kind, f'{args.dataset_name}_data.pth'))
-            if osp.exists(osp.join('data', 'processed', kind, f'{args.dataset_name}_metadata.json')):
-                os.remove(osp.join('data', 'processed', kind, f'{args.dataset_name}_metadata.json'))
-
-            shutil.rmtree(osp.join('data', 'separate', kind, args.dataset_name), ignore_errors=True)
+            shutil.rmtree(osp.join('data', 'processed', args.dataset_name, kind), ignore_errors=True)
 
     datasets = []
     for use_invariance in [True, False]:
         for split in ['train', 'val', 'test']:
             dataset = GraphDataset(root='data',
                                    dataset_name=args.dataset_name,
-                                   ele_label='data/ele.json',
                                    atom_embed='data/atom_init_embedding.json',
-                                   radii='data/radii.json',
                                    split=split,
                                    cutoff=args.cutoff,
                                    seed=args.seed,
                                    use_invariance=use_invariance)
             datasets.append(dataset)
+
+pdb.set_trace()
