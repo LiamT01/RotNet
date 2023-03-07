@@ -13,9 +13,6 @@ from torch_geometric.loader import DataLoader
 from tqdm import tqdm
 from utils import get_logger, reduce_losses
 
-# output_dir = f'exp/train_{datetime.now():%Y-%m-%d_%H:%M:%S}'
-# logger = get_logger(osp.join(output_dir, 'train.log'))
-
 parser = argparse.ArgumentParser()
 parser.add_argument('--use_invariance', action='store_true')
 parser.add_argument('--dataset_name', type=str, required=True)
@@ -40,29 +37,23 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 test_set = GraphDataset(root='data',
                         dataset_name=args.dataset_name,
-                        split='test',
-                        ele_label='data/ele.json',
                         atom_embed='data/atom_init_embedding.json',
-                        radii='data/radii.json',
+                        split='test',
                         cutoff=args.cutoff,
+                        seed=args.seed,
                         use_invariance=args.use_invariance)
 
 test_loader = DataLoader(test_set, batch_size=args.batch_size)
 
 model = GNN(num_layers=args.num_layers, x_size=args.x_size, hidden_size=args.hidden_size,
-            cutoff=args.cutoff, gaussian_num_steps=args.gaussian_num_steps, targets=test_set.metadata['targets'])
+            cutoff=args.cutoff, gaussian_num_steps=args.gaussian_num_steps,
+            targets=test_set.metadata['targets'])
 model = model.float().to(device)
 
 weights = torch.load(args.checkpoint, map_location=torch.device('cpu'))
 model.load_state_dict(weights)
 
 Loss = torch.nn.L1Loss()
-
-# logger.info(args)
-# logger.info(model)
-# logger.info(f'Average edges per node: {train_set.avg_edges}')
-
-# best_val_loss = float('inf')
 
 model.eval()
 sum_test_losses = 0

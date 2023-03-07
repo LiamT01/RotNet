@@ -3,7 +3,7 @@ import torch
 import pdb
 
 
-def get_invariant_pos(pos):
+def calc_rot_mat(pos):
     # Convert to numpy array
     if isinstance(pos, torch.Tensor):
         pos = pos.numpy()
@@ -17,7 +17,7 @@ def get_invariant_pos(pos):
     # Each row of vt is a principle vector
     # vt is orthonormal
     # The rotation matrix is simply the transposed vt
-    # First, get a tentative transformed result
+    # First, get a tentatively transformed result
     rot_mat = vt.T
     trans = pos_centered @ rot_mat
 
@@ -33,18 +33,8 @@ def get_invariant_pos(pos):
 
     # The final rot_mat and trans
     rot_mat = rot_mat * mask
-    trans = trans * mask
 
-    return {
-        'trans': trans,
-        'rot_mat': rot_mat,
-    }
-
-
-def gaussian_expand(dist, num_steps):
-    mu = torch.linspace(0, 1, num_steps).to(dist.device)
-    sigma = 1 / (num_steps - 1)
-    return torch.exp(-(dist[..., None] - mu) ** 2 / (2 * sigma ** 2)).flatten(start_dim=1)
+    return torch.from_numpy(rot_mat).float()
 
 
 if __name__ == '__main__':

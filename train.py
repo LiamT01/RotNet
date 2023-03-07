@@ -14,7 +14,7 @@ from models import GNN
 from torch_geometric.loader import DataLoader
 from tqdm import tqdm
 from utils import get_logger, reduce_losses, get_num_digits
-from weights import weights
+from loss_weights import loss_weights
 
 
 def main():
@@ -83,20 +83,18 @@ def train(gpu, args):
 
     train_set = GraphDataset(root='data',
                              dataset_name=args.dataset_name,
-                             ele_label='data/ele.json',
                              atom_embed='data/atom_init_embedding.json',
-                             radii='data/radii.json',
                              split='train',
                              cutoff=args.cutoff,
+                             seed=args.seed,
                              use_invariance=args.use_invariance)
 
     val_set = GraphDataset(root='data',
                            dataset_name=args.dataset_name,
-                           ele_label='data/ele.json',
                            atom_embed='data/atom_init_embedding.json',
-                           radii='data/radii.json',
                            split='val',
                            cutoff=args.cutoff,
+                           seed=args.seed,
                            use_invariance=args.use_invariance)
     if args.distributed:
         ################################################################
@@ -139,7 +137,8 @@ def train(gpu, args):
         val_loader = DataLoader(val_set, batch_size=args.batch_size)
 
     model = GNN(num_layers=args.num_layers, x_size=args.x_size, hidden_size=args.hidden_size,
-                cutoff=args.cutoff, gaussian_num_steps=args.gaussian_num_steps, targets=train_set.metadata['targets'])
+                cutoff=args.cutoff, gaussian_num_steps=args.gaussian_num_steps,
+                targets=train_set.metadata['targets'])
     model = model.float().cuda(gpu)
 
     if args.distributed:
@@ -154,7 +153,7 @@ def train(gpu, args):
     if rank <= 0:
         logger.info(args)
         logger.info(args.dataset_name)
-        logger.info(weights)
+        logger.info(loss_weights)
         logger.info(model)
         logger.info(f'Average edges per node: {train_set.metadata["averageEdgesPerNode"]}')
 
@@ -233,12 +232,6 @@ def train(gpu, args):
 
             if t[1] < best_val_loss:
                 logger.info(f'\t\tBest val_loss={t[1]} so far was found! Model weights were saved.')
-                # if epoch < 400:
-                #     if args.distributed:
-                #         torch.save(model.module.state_dict(), osp.join(ckpt_dir, 'early_epoch.pth'))
-                #     else:
-                #         torch.save(model.state_dict(), osp.join(ckpt_dir, 'early_epoch.pth'))
-                # else:
                 num_digits = get_num_digits(args.epochs)
                 if args.distributed:
                     torch.save(model.module.state_dict(),

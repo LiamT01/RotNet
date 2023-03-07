@@ -25,7 +25,7 @@ class GraphDataset(Dataset):
         if split_ratio is None:
             split_ratio = {'train': 0.8, 'val': 0.1, 'test': 0.1, }
 
-        assert split in ['train', 'val', 'test'], "split must be one of ['train', 'val', 'test']!"
+        assert split in ['train', 'val', 'test'], "Split must be one of ['train', 'val', 'test']!"
 
         self.root = root
         self.atom_embed = atom_embed
@@ -137,8 +137,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     if args.remake:
-        for kind in ['default', 'invariant']:
-            shutil.rmtree(osp.join('data', 'processed', args.dataset_name, kind), ignore_errors=True)
+        for invariance_type in ['default', 'invariant']:
+            shutil.rmtree(osp.join('data', 'processed', args.dataset_name, invariance_type), ignore_errors=True)
 
     datasets = []
     for use_invariance in [True, False]:
@@ -151,5 +151,3 @@ if __name__ == '__main__':
                                    seed=args.seed,
                                    use_invariance=use_invariance)
             datasets.append(dataset)
-
-pdb.set_trace()
