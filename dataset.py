@@ -137,8 +137,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     if args.remake:
-        for invariance_type in ['default', 'invariant']:
-            shutil.rmtree(osp.join('data', 'processed', args.dataset_name, invariance_type), ignore_errors=True)
+        shutil.rmtree(osp.join('data', 'processed', args.dataset_name), ignore_errors=True)
 
     datasets = []
     for use_invariance in [True, False]:
