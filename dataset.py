@@ -22,8 +22,8 @@ class GraphDataset(Dataset):
                  split, cutoff, split_ratio=None, seed=0, use_invariance=False):
         super().__init__()
 
-        if split_ratio is None:
-            split_ratio = {'train': 0.8, 'val': 0.1, 'test': 0.1, }
+        # if split_ratio is None:
+        #     split_ratio = {'train': 0.8, 'val': 0.1, 'test': 0.1, }
 
         assert split in ['train', 'val', 'test'], "Split must be one of ['train', 'val', 'test']!"
 
@@ -32,6 +32,7 @@ class GraphDataset(Dataset):
         self.cutoff = cutoff
         self.use_invariance = use_invariance
         self.metadata_dir = osp.join(self.root, 'processed', dataset_name)
+        self.dataset_name = dataset_name
 
         invariance_type = 'invariant' if self.use_invariance else 'default'
         self.processed_dir = osp.join(self.root, 'processed', dataset_name, invariance_type)
@@ -39,7 +40,7 @@ class GraphDataset(Dataset):
         os.makedirs(self.metadata_dir, exist_ok=True)
         os.makedirs(self.processed_dir, exist_ok=True)
 
-        if len(glob.glob(osp.join(self.processed_dir, '*.pth'))) !=\
+        if len(glob.glob(osp.join(self.processed_dir, '*.pth'))) != \
                 len(glob.glob(f'{osp.join(self.root, "raw", dataset_name)}/*')):
             print(f'Processed data missing or incomplete. Creating data at {self.processed_dir}...')
             self.process_data(dataset_name)
@@ -49,8 +50,10 @@ class GraphDataset(Dataset):
         np.random.seed(seed)
         np.random.shuffle(self.data_files)
 
-        idx = [int(split_ratio['train'] * len(self.data_files)),
-               int(split_ratio['val'] * len(self.data_files))]
+        # idx = [int(split_ratio['train'] * len(self.data_files)),
+        #        int(split_ratio['val'] * len(self.data_files))]
+
+        idx = [950, 50, len(self.data_files) - 1000]
 
         if split == 'train':
             self.data_files = self.data_files[: idx[0]]
@@ -126,6 +129,16 @@ class GraphDataset(Dataset):
 
     def __getitem__(self, idx):
         return torch.load(self.data_files[idx])
+
+    def get_stats(self):
+        all_stats = {'aspirin': {'energy': {'mean': -406737.276528638, 'std': 5.94684041516964}},
+                     'ethanol': {'energy': {'mean': -97195.93139643634, 'std': 4.192011124310927}},
+                     'malonaldehyde': {'energy': {'mean': -167501.8333753579, 'std': 4.139863758749647}},
+                     'naphthalene': {'energy': {'mean': -241898.78806430206, 'std': 5.5866752145315965}},
+                     'salicylic': {'energy': {'mean': -311033.7586819738, 'std': 5.4163097238486335}},
+                     'toluene': {'energy': {'mean': -170223.8472299696, 'std': 5.099644116283458}},
+                     'uracil': {'energy': {'mean': -260107.31017103896, 'std': 4.9230210812398125}}}
+        return all_stats[self.dataset_name]
 
 
 if __name__ == '__main__':

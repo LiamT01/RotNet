@@ -55,7 +55,7 @@ class GNNLayer(nn.Module):
 
 
 class GNN(nn.Module):
-    def __init__(self, num_layers, x_size, hidden_size, cutoff, gaussian_num_steps, targets):
+    def __init__(self, num_layers, x_size, hidden_size, cutoff, gaussian_num_steps, targets, stats):
         super().__init__()
 
         self.cutoff = cutoff
@@ -75,25 +75,32 @@ class GNN(nn.Module):
                 nn.Linear(hidden_size // 2, target['dim']),
             ) for target in self.targets
         ])
+        self.stats = stats
+
+        assert "energy" in self.stats.keys()
 
     def forward(self, batch, loss_fn):
         init_edge_states = self.f_edge(
             self.gaussian_expand(batch['ex_norm_displacement'], self.gaussian_num_steps)
         )
 
-        batch.x = self.f_node(batch.x)
+        x = self.f_node(batch.x)
         for layer in self.layers:
-            batch.x = layer(batch.x, batch.edge_index, batch.ex_norm_displacement[:, -1], init_edge_states)
+            x = layer(x, batch.edge_index, batch.ex_norm_displacement[:, -1], init_edge_states)
 
         results = []
         total_loss_per_batch = 0
         for target, layer in zip(self.targets, self.f_target):
             if target['level'] == 'node':
-                data = layer(batch.x)
+                data = layer(x)
             elif target['level'] == 'graph':
-                data = layer(scatter_mean(batch.x, index=batch.batch, dim=0))
+                data = layer(scatter_mean(x, index=batch.batch, dim=0))
             else:
                 raise Exception(f"Unrecognized level: {target['level']}. It must be either 'graph' or 'node'.")
+
+            if target['name'] == "energy":
+                stats = self.stats["energy"]
+                data = data * stats['std'] + stats['mean']
 
             ground_truth = batch[target['name']]
             loss = loss_fn(data, ground_truth)

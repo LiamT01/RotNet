@@ -43,11 +43,12 @@ test_set = GraphDataset(root='data',
                         seed=args.seed,
                         use_invariance=args.use_invariance)
 
-test_loader = DataLoader(test_set, batch_size=args.batch_size)
+test_loader = DataLoader(test_set, batch_size=args.batch_size, pin_memory=True, num_workers=6)
 
 model = GNN(num_layers=args.num_layers, x_size=args.x_size, hidden_size=args.hidden_size,
             cutoff=args.cutoff, gaussian_num_steps=args.gaussian_num_steps,
-            targets=test_set.metadata['targets'])
+            targets=test_set.metadata['targets'],
+            stats=test_set.get_stats())
 model = model.float().to(device)
 
 weights = torch.load(args.checkpoint, map_location=torch.device('cpu'))
@@ -60,7 +61,7 @@ sum_test_losses = 0
 test_results_per_epoch = []
 with torch.no_grad():
     for batch in tqdm(test_loader):
-        batch = batch.to(device)
+        batch = batch.cuda(device=device, non_blocking=True)
         total_loss_per_batch, test_results_per_batch = model(batch, Loss)
         sum_test_losses += total_loss_per_batch.item()
         test_results_per_epoch.append(test_results_per_batch)

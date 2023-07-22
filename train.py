@@ -15,6 +15,35 @@ from torch_geometric.loader import DataLoader
 from tqdm import tqdm
 from utils import get_logger, reduce_losses, get_num_digits
 from loss_weights import loss_weights
+from torch_ema import ExponentialMovingAverage
+
+
+# def accumulate(model1, model2, decay=0.999):
+#     old = [p.clone().detach() for p in list(model1.parameters())]
+#
+#
+#
+#     one_minus_decay = 1.0 - decay
+#     with torch.no_grad():
+#         for s_param, old_param, param in zip(model1.parameters(), old, model2.parameters()):
+#             tmp = (old_param - param)
+#             # tmp will be a new tensor so we can do in-place
+#             tmp.mul_(one_minus_decay)
+#             s_param.sub_(tmp)
+#
+#     model1.load_state_dict({k: v for k, v in model2.state_dict().items() if "running_" in k}, strict=False)
+#
+#     # par1 = dict(model1.named_parameters())
+#     # par2 = dict(model2.named_parameters())
+#
+#     # for k in par1.keys():
+#     #     # par1[k].data.mul_(decay).add_(1 - decay, par2[k].data)
+#     #     # Above is deprecated!!!
+#     #     # par1[k].data.mul_(decay).add_(par2[k].data, alpha=1 - decay)
+#     #
+#     #     tmp = (par1[k].data - par2[k].data)
+#     #     tmp.mul(1. - decay)
+#     #     par1[k].data.sub_(tmp)
 
 
 def main():
@@ -116,8 +145,8 @@ def train(gpu, args):
             batch_size=args.batch_size,
             ##############################
             shuffle=False,
-            num_workers=0,
-            pin_memory=False,
+            num_workers=6,
+            pin_memory=True,
             sampler=train_sampler,
             ##############################
         )
@@ -127,19 +156,22 @@ def train(gpu, args):
             batch_size=args.batch_size,
             ##############################
             shuffle=False,
-            num_workers=0,
-            pin_memory=False,
+            num_workers=6,
+            pin_memory=True,
             sampler=val_sampler,
             ##############################
         )
     else:
-        train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True)
-        val_loader = DataLoader(val_set, batch_size=args.batch_size)
+        train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=6, pin_memory=True)
+        val_loader = DataLoader(val_set, batch_size=args.batch_size, num_workers=6, pin_memory=True)
 
     model = GNN(num_layers=args.num_layers, x_size=args.x_size, hidden_size=args.hidden_size,
                 cutoff=args.cutoff, gaussian_num_steps=args.gaussian_num_steps,
-                targets=train_set.metadata['targets'])
+                targets=train_set.metadata['targets'],
+                stats=train_set.get_stats())
     model = model.float().cuda(gpu)
+
+    ema = ExponentialMovingAverage(model.parameters(), decay=0.99, use_num_updates=True)
 
     if args.distributed:
         ###############################################################
@@ -149,6 +181,8 @@ def train(gpu, args):
 
     loss_fn = torch.nn.L1Loss().cuda(gpu)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
+                                                           factor=0.95, patience=100, verbose=True)
 
     if rank <= 0:
         logger.info(args)
@@ -174,6 +208,8 @@ def train(gpu, args):
             total_loss_per_batch.backward()
             optimizer.step()
 
+            ema.update()
+
             sum_train_losses += total_loss_per_batch.item()
             train_results_per_epoch.append(train_results_per_batch)
 
@@ -183,12 +219,13 @@ def train(gpu, args):
         model.eval()
         sum_val_losses = 0
         val_results_per_epoch = []
-        with torch.no_grad():
-            for batch in val_loader:
-                batch = batch.cuda(non_blocking=True)
-                total_loss_per_batch, val_results_per_batch = model(batch, loss_fn)
-                sum_val_losses += total_loss_per_batch.item()
-                val_results_per_epoch.append(val_results_per_batch)
+        with ema.average_parameters():
+            with torch.no_grad():
+                for batch in val_loader:
+                    batch = batch.cuda(non_blocking=True)
+                    total_loss_per_batch, val_results_per_batch = model(batch, loss_fn)
+                    sum_val_losses += total_loss_per_batch.item()
+                    val_results_per_epoch.append(val_results_per_batch)
 
         train_reduced_losses = reduce_losses(train_results_per_epoch)
         val_reduced_losses = reduce_losses(val_results_per_epoch)
@@ -213,6 +250,8 @@ def train(gpu, args):
         t[2 * num_losses + 4:] = t[2 * num_losses + 4:] / t[1]
         t = t[2:].tolist()
 
+        scheduler.step(t[1])
+
         if rank <= 0:
             logger.info(f'Epoch {epoch}, Total: train_loss={t[0]:.8f}, val_loss={t[1]:.8f}')
 
@@ -233,12 +272,17 @@ def train(gpu, args):
             if t[1] < best_val_loss:
                 logger.info(f'\t\tBest val_loss={t[1]} so far was found! Model weights were saved.')
                 num_digits = get_num_digits(args.epochs)
-                if args.distributed:
-                    torch.save(model.module.state_dict(),
-                               osp.join(ckpt_dir, f'epoch_{epoch:0{num_digits}d}.pth'))
-                else:
-                    torch.save(model.state_dict(),
-                               osp.join(ckpt_dir, f'epoch_{epoch:0{num_digits}d}.pth'))
+                with ema.average_parameters():
+                    if args.distributed:
+                        torch.save(
+                            model.module.state_dict(),
+                            osp.join(ckpt_dir, f'epoch_{epoch:0{num_digits}d}.pth')
+                        )
+                    else:
+                        torch.save(
+                            model.state_dict(),
+                            osp.join(ckpt_dir, f'epoch_{epoch:0{num_digits}d}.pth')
+                        )
 
                 best_val_loss = t[1]
 
