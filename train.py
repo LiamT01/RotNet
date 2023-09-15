@@ -18,34 +18,6 @@ from loss_weights import loss_weights
 from torch_ema import ExponentialMovingAverage
 
 
-# def accumulate(model1, model2, decay=0.999):
-#     old = [p.clone().detach() for p in list(model1.parameters())]
-#
-#
-#
-#     one_minus_decay = 1.0 - decay
-#     with torch.no_grad():
-#         for s_param, old_param, param in zip(model1.parameters(), old, model2.parameters()):
-#             tmp = (old_param - param)
-#             # tmp will be a new tensor so we can do in-place
-#             tmp.mul_(one_minus_decay)
-#             s_param.sub_(tmp)
-#
-#     model1.load_state_dict({k: v for k, v in model2.state_dict().items() if "running_" in k}, strict=False)
-#
-#     # par1 = dict(model1.named_parameters())
-#     # par2 = dict(model2.named_parameters())
-#
-#     # for k in par1.keys():
-#     #     # par1[k].data.mul_(decay).add_(1 - decay, par2[k].data)
-#     #     # Above is deprecated!!!
-#     #     # par1[k].data.mul_(decay).add_(par2[k].data, alpha=1 - decay)
-#     #
-#     #     tmp = (par1[k].data - par2[k].data)
-#     #     tmp.mul(1. - decay)
-#     #     par1[k].data.sub_(tmp)
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--distributed', action='store_true')
@@ -73,10 +45,10 @@ def main():
 
     if args.distributed:
         ############################################################
-        args.world_size = args.num_gpus_per_node * args.num_nodes  #
-        os.environ['MASTER_ADDR'] = args.master_addr               #
-        os.environ['MASTER_PORT'] = args.master_port               #
-        mp.spawn(train, nprocs=args.world_size, args=(args,))      #
+        args.world_size = args.num_gpus_per_node * args.num_nodes
+        os.environ['MASTER_ADDR'] = args.master_addr
+        os.environ['MASTER_PORT'] = args.master_port
+        mp.spawn(train, nprocs=args.world_size, args=(args,))
         ############################################################
     else:
         train(0, args)
@@ -167,11 +139,9 @@ def train(gpu, args):
 
     model = GNN(num_layers=args.num_layers, x_size=args.x_size, hidden_size=args.hidden_size,
                 cutoff=args.cutoff, gaussian_num_steps=args.gaussian_num_steps,
-                targets=train_set.metadata['targets'],
-                stats=train_set.get_stats())
-    model = model.float().cuda(gpu)
+                targets=train_set.metadata['targets'])
 
-    ema = ExponentialMovingAverage(model.parameters(), decay=0.99, use_num_updates=True)
+    model = model.float().cuda(gpu)
 
     if args.distributed:
         ###############################################################
@@ -179,10 +149,11 @@ def train(gpu, args):
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[gpu])
         ###############################################################
 
+    ema = ExponentialMovingAverage(model.parameters(), decay=0.99, use_num_updates=True)
+
     loss_fn = torch.nn.L1Loss().cuda(gpu)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
-                                                           factor=0.95, patience=100, verbose=True)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=100)
 
     if rank <= 0:
         logger.info(args)
@@ -192,6 +163,8 @@ def train(gpu, args):
         logger.info(f'Average edges per node: {train_set.metadata["averageEdgesPerNode"]}')
 
     best_val_loss = float('inf')
+
+    iters = len(train_loader)
 
     for epoch in tqdm(range(1, args.epochs + 1)):
         if args.distributed:
@@ -209,6 +182,8 @@ def train(gpu, args):
             optimizer.step()
 
             ema.update()
+
+            scheduler.step(epoch + idx / iters)
 
             sum_train_losses += total_loss_per_batch.item()
             train_results_per_epoch.append(train_results_per_batch)
@@ -249,8 +224,6 @@ def train(gpu, args):
         t[4: 2 * num_losses + 4] = t[4: 2 * num_losses + 4] / t[0]
         t[2 * num_losses + 4:] = t[2 * num_losses + 4:] / t[1]
         t = t[2:].tolist()
-
-        scheduler.step(t[1])
 
         if rank <= 0:
             logger.info(f'Epoch {epoch}, Total: train_loss={t[0]:.8f}, val_loss={t[1]:.8f}')

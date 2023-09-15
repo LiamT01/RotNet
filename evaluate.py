@@ -47,8 +47,7 @@ test_loader = DataLoader(test_set, batch_size=args.batch_size, pin_memory=True, 
 
 model = GNN(num_layers=args.num_layers, x_size=args.x_size, hidden_size=args.hidden_size,
             cutoff=args.cutoff, gaussian_num_steps=args.gaussian_num_steps,
-            targets=test_set.metadata['targets'],
-            stats=test_set.get_stats())
+            targets=test_set.metadata['targets'])
 model = model.float().to(device)
 
 weights = torch.load(args.checkpoint, map_location=torch.device('cpu'))
@@ -72,7 +71,7 @@ t = [test_reduced_losses['count']] + \
     [sum_test_losses] + \
     [*test_reduced_losses['sum loss'].values()] + \
     [*test_reduced_losses['sum relative loss'].values()]
-t = torch.tensor(t, dtype=torch.float, device='cuda')
+t = torch.tensor(t, dtype=torch.float, device=device)
 
 num_losses = len(test_set.metadata['targets'])
 t[1] = t[1] / t[0]

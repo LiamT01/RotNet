@@ -8,6 +8,12 @@ from torch_scatter import scatter_add, scatter_mean
 from loss_weights import loss_weights
 
 
+def init_weights(m):
+    if isinstance(m, nn.Linear):
+        torch.nn.init.xavier_uniform_(m.weight)
+        m.bias.data.fill_(0.001)
+
+
 class GNNLayer(nn.Module):
     def __init__(self, hidden_size):
         super().__init__()
@@ -16,21 +22,24 @@ class GNNLayer(nn.Module):
 
         self.f_upd = nn.Sequential(
             nn.Linear(hidden_size, hidden_size),
-            nn.LeakyReLU(),
-            nn.BatchNorm1d(hidden_size),
+            nn.SiLU(),
             nn.Linear(hidden_size, hidden_size),
+            nn.BatchNorm1d(hidden_size),
+            nn.SiLU(),
         )
         self.f_int = nn.Sequential(
             nn.Linear(3 * hidden_size, hidden_size),
-            nn.LeakyReLU(),
-            nn.BatchNorm1d(hidden_size),
+            nn.SiLU(),
             nn.Linear(hidden_size, hidden_size),
-            nn.LeakyReLU(),
-            nn.BatchNorm1d(hidden_size),
-            nn.Linear(hidden_size, hidden_size),
+            nn.SiLU(),
         )
-        self.f_mes = nn.Linear(hidden_size, hidden_size)
-        self.ind_imp_mask = nn.Parameter(torch.ones(hidden_size).reshape(1, -1))
+        self.f_mes = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.SiLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.SiLU(),
+        )
+        self.ind_imp_mask = nn.Parameter(torch.zeros(hidden_size, hidden_size))
 
     def forward(self, x, edge_index, norm_distance, init_edge_states):
         src, dst = edge_index
@@ -39,8 +48,8 @@ class GNNLayer(nn.Module):
         int_imp_mask = decay_factor * self.f_int(torch.cat([x[src], init_edge_states, x[dst]], dim=1))
 
         m_st = int_imp_mask * self.f_mes(x[src])
-        m_t = self.ind_imp_mask * self.f_mes(x)
-        incoming_message = scatter_add(m_st, index=dst, dim=0)
+        m_t = self.f_mes(x) @ self.ind_imp_mask
+        incoming_message = scatter_mean(m_st, index=dst, dim=0)
         incoming_message = torch.cat(
             [
                 incoming_message,
@@ -51,33 +60,45 @@ class GNNLayer(nn.Module):
             ],
             dim=0
         )
-        return self.f_upd(m_t + incoming_message) + x
+        return self.f_upd(m_t + incoming_message)
 
 
 class GNN(nn.Module):
-    def __init__(self, num_layers, x_size, hidden_size, cutoff, gaussian_num_steps, targets, stats):
+    def __init__(self, num_layers, x_size, hidden_size, cutoff, gaussian_num_steps, targets):
         super().__init__()
 
         self.cutoff = cutoff
         self.gaussian_num_steps = gaussian_num_steps
 
-        self.f_edge = nn.Linear(4 * gaussian_num_steps, hidden_size)
+        self.f_edge = nn.Sequential(
+            nn.Linear(4 * gaussian_num_steps, hidden_size),
+            nn.SiLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.SiLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.SiLU(),
+        )
         self.layers = nn.ModuleList([
             GNNLayer(hidden_size=hidden_size) for _ in range(num_layers)
         ])
-        self.f_node = nn.Linear(x_size, hidden_size)
+        self.f_node = nn.Sequential(
+            nn.Linear(x_size, hidden_size),
+            nn.SiLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.SiLU(),
+        )
         self.targets = targets
         self.f_target = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(hidden_size, hidden_size // 2),
-                nn.LeakyReLU(),
-                nn.BatchNorm1d(hidden_size // 2),
-                nn.Linear(hidden_size // 2, target['dim']),
+                nn.SiLU(),
+                nn.Linear(hidden_size // 2, hidden_size // 4),
+                nn.SiLU(),
+                nn.Linear(hidden_size // 4, target['dim']),
             ) for target in self.targets
         ])
-        self.stats = stats
 
-        assert "energy" in self.stats.keys()
+        self.apply(init_weights)
 
     def forward(self, batch, loss_fn):
         init_edge_states = self.f_edge(
@@ -86,7 +107,7 @@ class GNN(nn.Module):
 
         x = self.f_node(batch.x)
         for layer in self.layers:
-            x = layer(x, batch.edge_index, batch.ex_norm_displacement[:, -1], init_edge_states)
+            x = layer(x, batch.edge_index, batch.ex_norm_displacement[:, -1], init_edge_states) + x
 
         results = []
         total_loss_per_batch = 0
@@ -97,10 +118,6 @@ class GNN(nn.Module):
                 data = layer(scatter_mean(x, index=batch.batch, dim=0))
             else:
                 raise Exception(f"Unrecognized level: {target['level']}. It must be either 'graph' or 'node'.")
-
-            if target['name'] == "energy":
-                stats = self.stats["energy"]
-                data = data * stats['std'] + stats['mean']
 
             ground_truth = batch[target['name']]
             loss = loss_fn(data, ground_truth)

@@ -2,6 +2,16 @@
 
 ![Overview of RotNet](figs/rotnet.png)
 
+Please cite
+
+[To be populated]
+
+## Updates
+
+*More recent updates are available from [GitHub](https://github.com/LiamT01/RotNet).*
+
+- [Sep 15, 2023] We revised RotNet and added training tricks, which eliminate the instability issue reported in the paper.
+
 ## Datasets
 
 The two datasets used in the experiments can be found at:
@@ -34,7 +44,7 @@ Please put the downloaded dataset(s) in `./data/raw`.
 
 ## Usage
 
-1. Clone this repository.
+1. Clone [this repository](https://github.com/LiamT01/RotNet).
 2. Set up an environment as per `./requirements.txt`.
 3. Download our datasets and put them in `./data/raw`. You may use custom datasets that have been formatted like ours.
 4. Process raw data. To process protein fragments, for example, run
