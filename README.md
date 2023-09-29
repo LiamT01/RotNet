@@ -4,7 +4,16 @@
 
 Please cite
 
-[To be populated]
+```latex
+@article{tu2023rotnet,
+  title={RotNet: A Rotationally Invariant Graph Neural Network for Quantum Mechanical Calculations},
+  author={Tu, Hongwei and Han, Yanqiang and Wang, Zhilong and Chen, An and Tao, Kehao and Ye, Simin and Wang, Shiwei and Wei, Zhiyun and Li, Jinjin},
+  journal={Small Methods},
+  pages={2300534},
+  year={2023},
+  publisher={Wiley Online Library}
+}
+```
 
 ## Updates
 
